@@ -1,0 +1,101 @@
+module param
+    implicit none
+    !parameters
+    integer, parameter :: tile_dim = 32
+    integer, parameter :: block_dim = 8
+    integer, parameter :: nReps = 100
+    integer, parameter :: nx = 1024, ny = 1024
+    integer, parameter :: mem_size = nx*ny*4
+end module param
+
+
+module kernel
+    use param
+    implicit none
+contains
+    attributes(global) subroutine copy(idata, odata)
+        real, intent(out) :: odata(nx,ny)
+        real, intent(in) :: idata(nx,ny)
+        real, shared :: tile(tile_dim,tile_dim)
+        integer :: x,y,j
+
+        x = (blockIdx%x-1)*tile_dim +threadIdx%x
+        y = (blockIdx%y-1)*tile_dim +threadIdx%y
+
+        do j=0, tile_dim-1, block_dim
+            tile(threadIdx%x,threadIdx%y+j) = idata(x,y+j)
+        enddo
+
+        call syncthread()
+
+        do j=0, tile_dim-1, block_dim
+            tile(threadIdx%x,threadIdx%y+j) = idata(x,y+j)
+        enddo
+
+    end subroutine copy
+
+end module kernel
+
+program main
+    use cudafor
+    use param
+    use kernel
+    implicit none
+
+    type(dim3) :: grid, tblock
+    type(cudaEvent) :: startEvent, stopEvent
+    type(cudaDeviceProp) :: prop
+    real:: time
+
+    real :: in_h(nx,ny), copy_h(nx,ny), trp_h(ny,nx)
+    real :: gold(nx,ny)
+    real,device :: in_d(nx,ny), copy_d(nx,ny), trp_d(ny,nx)
+
+
+    integer :: i,j,istat
+
+    grid = dim3(nx/tile_dim,ny/tile_dim,1)
+    tblock = dim3(tile_dim, block_dim,1)
+
+    !initialization
+    do j=1,ny
+        do i=1,nx
+            in_h = (i,j) = i+(j-1)*nx
+        enddo
+    enddo
+
+    gold = transpose(in_h)
+
+    in_d = in_h
+    trp_d = -1.0
+    copy_d = -1.0
+
+    istat = cudaEventCreate(startEvent)
+    istat = cudaEventCreate(stopEvent)
+    write(*,'(/,a25,a25)') 'Routine', 'Bandwidth (GB/s)'
+    write(*,'(a25)', advance='NO') 'shared memory copy'
+
+    copy_d = -1.0
+    ! warmup
+    call copy<<<grid, tBlock>>>(copy_d, in_d)
+
+    istat = cudaEventRecord(startEvent, 0)
+    do i=1, nReps
+       call copy<<<grid, tBlock>>> (copy_d, in_d)
+    end do
+    istat = cudaEventRecord(stopEvent, 0)
+    istat = cudaEventSynchronize(stopEvent)
+    istat = cudaEventElapsedTime(time, startEvent, stopEvent)
+    copy_h = copy_d
+    call postprocess(in_h, copy_h, time)
+contains
+
+    subroutine postprocess(ref, res, t)
+      real, intent(in) :: ref(:,:), res(:,:), t
+      if (all(res == ref)) then
+         write(*,'(f20.2)') 2.0*mem_size*1.0e-6/(t/NUM_REPS)
+      else
+         write(*,'(a20)') '*** Failed ***'
+      end if
+    end subroutine postprocess
+end program main
