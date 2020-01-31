@@ -26,10 +26,10 @@ contains
             tile(threadIdx%x,threadIdx%y+j) = idata(x,y+j)
         enddo
 
-        call syncthread()
+        call syncthreads()
 
         do j=0, tile_dim-1, block_dim
-            tile(threadIdx%x,threadIdx%y+j) = idata(x,y+j)
+            odata(x,y+j) = tile(threadIdx%x,threadIdx%y+j)
         enddo
 
     end subroutine copy
@@ -60,7 +60,7 @@ program main
     !initialization
     do j=1,ny
         do i=1,nx
-            in_h = (i,j) = i+(j-1)*nx
+            in_h (i,j) = i+(j-1)*nx
         enddo
     enddo
 
@@ -77,11 +77,11 @@ program main
 
     copy_d = -1.0
     ! warmup
-    call copy<<<grid, tBlock>>>(copy_d, in_d)
+    call copy<<<grid, tBlock>>> (in_d,copy_d)
 
     istat = cudaEventRecord(startEvent, 0)
     do i=1, nReps
-       call copy<<<grid, tBlock>>> (copy_d, in_d)
+       call copy<<<grid, tBlock>>> (in_d,copy_d)
     end do
     istat = cudaEventRecord(stopEvent, 0)
     istat = cudaEventSynchronize(stopEvent)
@@ -93,7 +93,7 @@ contains
     subroutine postprocess(ref, res, t)
       real, intent(in) :: ref(:,:), res(:,:), t
       if (all(res == ref)) then
-         write(*,'(f20.2)') 2.0*mem_size*1.0e-6/(t/NUM_REPS)
+         write(*,'(f20.2)') 2.0*mem_size*1.0e-6/(t/nReps)
       else
          write(*,'(a20)') '*** Failed ***'
       end if
